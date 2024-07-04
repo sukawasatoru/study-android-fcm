@@ -1,0 +1,129 @@
+plugins {
+    alias libs.plugins.android.application apply false
+    alias libs.plugins.kotlin.android apply false
+    alias libs.plugins.kotlin.serialization apply false
+    alias libs.plugins.ksp apply false
+}
+
+def setupAndroidPlugin = { Project project ->
+    project.android {
+        compileSdk 34
+        buildToolsVersion = '34.0.0'
+
+        defaultConfig {
+            minSdk 24
+            targetSdk 34
+        }
+
+        lint {
+            checkAllWarnings true
+            checkDependencies true
+            enable += 'WrongThreadInterprocedural'
+            disable += 'NewerVersionAvailable'
+            fatal += 'VisibleForTests'
+        }
+
+        signingConfigs {
+            config {
+                enableV3Signing true
+                enableV4Signing true
+            }
+        }
+    }
+}
+
+def setupKotlinAndroidPlugin = { Project project ->
+    project.kotlin {
+        jvmToolchain 17
+    }
+
+    project.android {
+        kotlinOptions {
+            freeCompilerArgs += '-opt-in=kotlin.RequiresOptIn'
+        }
+    }
+}
+
+// https://developer.android.com/kotlin/style-guide
+// https://pinterest.github.io/ktlint/latest/install/integrations/#custom-gradle-integration
+configurations {
+    ktlint
+}
+
+dependencies {
+    ktlint(libs.ktlint) {
+        attributes {
+            attribute(Bundling.BUNDLING_ATTRIBUTE, getObjects().named(Bundling, Bundling.EXTERNAL))
+        }
+    }
+}
+
+def setupKtlint = { Project project ->
+    def srcArgs = ['src/**/*.kt', '!**/build/**', '!src/test/**', '!src/androidTest/**']
+    project.tasks.register('ktlintCheck', JavaExec) {
+        group 'verification'
+        description 'Check Kotlin code style.'
+        classpath configurations.ktlint
+        mainClass.set 'com.pinterest.ktlint.Main'
+        args srcArgs
+    }
+
+    project.tasks.named("check") {
+        dependsOn project.tasks.named("ktlintCheck")
+    }
+
+    project.tasks.register('ktlintFormat', JavaExec) {
+        group 'formatting'
+        description 'Fix Kotlin code style deviations.'
+        classpath configurations.ktlint
+        mainClass.set 'com.pinterest.ktlint.Main'
+        jvmArgs "--add-opens=java.base/java.lang=ALL-UNNAMED"
+        args(['-F'] + srcArgs)
+    }
+}
+
+def setupProtobufPlugin = { Project project ->
+    project.dependencies {
+        implementation libs.protobuf.lite
+    }
+
+    project.protobuf {
+        protoc {
+            artifact = libs.protobuf.protoc.get()
+        }
+
+        generateProtoTasks {
+            all().each { task ->
+                task.builtins {
+                    java {
+                        option 'lite'
+                    }
+                }
+            }
+        }
+    }
+}
+
+subprojects {
+    plugins.whenPluginAdded {
+        switch (it.class.name) {
+            case 'com.android.build.gradle.AppPlugin':
+                // fallthrough.
+            case 'com.android.build.gradle.LibraryPlugin':
+                setupAndroidPlugin(project)
+                break
+            case 'org.jetbrains.kotlin.gradle.plugin.KotlinAndroidPluginWrapper':
+                setupKotlinAndroidPlugin(project)
+                setupKtlint(project)
+                break
+            default:
+                break
+        }
+    }
+}
+
+tasks.register('clean', Delete) {
+    group 'build'
+
+    delete rootProject.layout.buildDirectory
+}
